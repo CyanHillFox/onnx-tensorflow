@@ -88,15 +88,30 @@ class ConvMixin(BroadcastMixin):
                                         "Tensorflow")
 
     group = node.attrs.get("group", 1)
+    # Is this convolution depthwise?
+    depthwise = (group == x_shape[1] and not transpose)
 
-    weight_groups = tf.split(weights, num_or_size_splits=group, axis=-1)
+    if depthwise:
+      # Depthwise convolution.
+      # The convolution kernel layout in tf.depthwise_conv is: [filter_height, filter_width, in_channels, channel_multiplier]
+      # Weight is now (KH x KW X C/g X M), or more precisely, (KH x KW X C/g X (g * M/g)),
+      # we reshape it to (KH x KW x C x M/g)
+      # NOTE: Assuming weight has fixed shape.
+      weight_shape = weights.get_shape().as_list()
+      depthwise_filter_shape = weight_shape[0:2] + [-1, weight_shape[3]//group]
+      weights = tf.reshape(weights, depthwise_filter_shape)
 
-    if support_cuda:
-      xs = tf.split(x, num_or_size_splits=group, axis=1)
+      weight_groups = [weights]
+      xs = [x]
     else:
-      x = tf.transpose(
-          x, perm=get_perm_from_formats(storage_format, compute_format))
-      xs = tf.split(x, num_or_size_splits=group, axis=-1)
+      weight_groups = tf.split(weights, num_or_size_splits=group, axis=-1)
+
+      if support_cuda:
+        xs = tf.split(x, num_or_size_splits=group, axis=1)
+      else:
+        x = tf.transpose(
+            x, perm=get_perm_from_formats(storage_format, compute_format))
+        xs = tf.split(x, num_or_size_splits=group, axis=-1)
 
     if transpose:
       if dilations != [1] * spatial_size:
@@ -216,16 +231,35 @@ class ConvMixin(BroadcastMixin):
           convolved.append(conv_rs)
 
     else:
-      convolved = [
-          tf.nn.convolution(
-              x,
-              weight,
-              pad_mode,
-              strides=strides,
-              dilation_rate=dilations,
-              data_format=compute_format)
-          for (x, weight) in zip(xs, weight_groups)
-      ]
+      if not depthwise:
+        convolved = [
+            tf.nn.convolution(
+                x,
+                weight,
+                pad_mode,
+                strides=strides,
+                dilation_rate=dilations,
+                data_format=compute_format)
+            for (x, weight) in zip(xs, weight_groups)
+        ]
+      else:
+        # depthwise
+        if storage_format == "NHWC":
+          strides = [1] + strides + [1]
+        elif storage_format == 'NCHW':
+          strides = [1, 1] + strides
+        else:
+          raise ValueError(f"invalid storage format {storage_format}")
+        convolved = [
+          tf.nn.depthwise_conv2d(
+            x,
+            weight,
+            strides=strides,
+            padding=pad_mode,
+            dilations=dilations,
+            data_format=compute_format
+          ) for x, weight in zip(xs, weight_groups)
+        ]
 
     if len(node.inputs) == 2:
       if support_cuda:
