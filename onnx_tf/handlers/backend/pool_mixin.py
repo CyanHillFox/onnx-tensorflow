@@ -67,7 +67,11 @@ class PoolMixin(object):
           return cls._compatibility_pool(node, input_dict, pooling_type)
       else:
         if pads != [0] * spatial_size * 2:
-          x = PadMixin.get_padding_as_op(x, pads)
+          from tensorflow.python.framework import dtypes
+          # use a reasonable negative number
+          min_value_of_type = {dtypes.float32: -10240}
+          pad_value = 0 if not (pooling_type == "MAX" and x.dtype in min_value_of_type) else min_value_of_type[x.dtype]
+          x = PadMixin.get_padding_as_op(x, pads, pad_value=pad_value)
         pad = "VALID"
     elif pooling_type == "MAX_WITH_ARGMAX":
       if pad is PAD_TF_INCOMPATIBLE:
