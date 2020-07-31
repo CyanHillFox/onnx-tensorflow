@@ -102,6 +102,10 @@ class ConvMixin(BroadcastMixin):
       weights = tf.reshape(weights, depthwise_filter_shape)
 
       weight_groups = [weights]
+      if not support_cuda:
+        # transpose input to NHWC layout
+        x = tf.transpose(
+            x, perm=get_perm_from_formats(storage_format, compute_format))
       xs = [x]
     else:
       weight_groups = tf.split(weights, num_or_size_splits=group, axis=-1)
@@ -244,9 +248,9 @@ class ConvMixin(BroadcastMixin):
         ]
       else:
         # depthwise
-        if storage_format == "NHWC":
+        if compute_format == "NHWC":
           strides = [1] + strides + [1]
-        elif storage_format == 'NCHW':
+        elif compute_format == 'NCHW':
           strides = [1, 1] + strides
         else:
           raise ValueError(f"invalid storage format {storage_format}")
