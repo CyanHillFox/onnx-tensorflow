@@ -63,7 +63,13 @@ class ConvMixin(BroadcastMixin):
     if "auto_pad" not in node.attrs or node.attrs["auto_pad"] == "NOTSET":
       if not transpose:
         if pads != [0, 0] * spatial_size:
-          x = PadMixin.get_padding_as_op(x, pads)
+          if support_cuda:
+            x = PadMixin.get_padding_as_op(x, pads)
+          else:
+            # transpsoe in NHWC mode
+            x = tf.transpose(x, get_perm_from_formats(storage_format, compute_format))
+            x = PadMixin.get_padding_as_op(x, pads, layout=compute_format)
+            x = tf.transpose(x, get_perm_from_formats(compute_format, storage_format))
         pad_mode = "VALID"
       else:
         pad_mode = "NOTSET"
